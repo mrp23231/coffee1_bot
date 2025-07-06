@@ -15,12 +15,16 @@ from telegram.ext import (
 )
 from apscheduler.schedulers.background import BackgroundScheduler
 
-# Настройка логирования
+# Логирование
 logging.basicConfig(level=logging.INFO)
 
 # Получение переменных окружения
 DATABASE_URL = os.getenv("DATABASE_URL")
-TELEGRAM_TOKEN = os.getenv("7596167926:AAGCtIVtPJ4EPfxFLu1pqwdYR2O2_G1mkjQ")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+
+# Проверка токена
+if not TELEGRAM_TOKEN:
+    raise ValueError("TELEGRAM_TOKEN не установлен")
 
 # Подключение к PostgreSQL
 def init_db():
@@ -43,7 +47,7 @@ def init_db():
 def get_user(user_id):
     conn = psycopg2.connect(DATABASE_URL, sslmode='require')
     c = conn.cursor()
-    c.execute("SELECT * FROM users WHERE user_id=%s", (user_id,))
+    c.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
     row = c.fetchone()
     conn.close()
     return row
@@ -53,7 +57,7 @@ def update_user(user_id, **kwargs):
     c = conn.cursor()
     fields = ", ".join([f"{k} = %s" for k in kwargs])
     values = list(kwargs.values()) + [user_id]
-    c.execute(f"UPDATE users SET {fields} WHERE user_id=%s", values)
+    c.execute(f"UPDATE users SET {fields} WHERE user_id = %s", values)
     conn.commit()
     conn.close()
 
@@ -97,7 +101,7 @@ def get_main_keyboard():
         [InlineKeyboardButton("🏆 Лидерборд", callback_data="leaderboard")],
     ])
 
-# Инициализация глобальных переменных
+# Глобальные переменные
 user_points = {}
 user_games = {}
 user_tasks = {}
@@ -169,7 +173,7 @@ async def myinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 💯 Баллов: {user_points.get(user.id, 0)}
 🎮 Победы: {user_games[user.id]['wins']} | Поражения: {user_games[user.id]['losses']}
 📌 Задачи: {len(user_tasks.get(user.id, []))}
-🎯 Ежедневное задание: {data.get("daily_task", "Нет") if not data.get("daily_task_completed", False) else "✅ Выполнено!"}
+🎯 Ежедневное задание: {data.get('daily_task', 'Нет') if not data.get('daily_task_completed', False) else '✅ Выполнено!'}
 """
     await update.message.reply_text(stats, reply_markup=get_main_keyboard())
 
@@ -180,19 +184,19 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     if query.data == "fact":
-        user_points[user.id] += 1
+        user_points[user.id] = user_points.get(user.id, 0) + 1
         gif = random.choice(gif_facts)
         await query.edit_message_text("Лови факт!")
         await context.bot.send_animation(chat_id=query.message.chat_id, animation=gif)
         await context.bot.send_message(query.message.chat_id, "Хочешь ещё?", reply_markup=get_main_keyboard())
 
     elif query.data == "api_joke":
-        user_points[user.id] += 1
+        user_points[user.id] = user_points.get(user.id, 0) + 1
         try:
             response = requests.get(DAD_JOKE_API, headers={"Accept": "application/json"})
-            joke = response.json()["joke"] if response.status_code == 200 else "Ошибка."
-        except:
-            joke = "Ошибка получения шутки."
+            joke = response.json()["joke"] if response.status_code == 200 else "Ошибка получения шутки."
+        except Exception as e:
+            joke = f"Ошибка: {str(e)}"
         await query.edit_message_text(f"😂 Вот тебе шутка:\n\n{joke}")
         await context.bot.send_message(query.message.chat_id, "Хочешь ещё?", reply_markup=get_main_keyboard())
 
@@ -216,12 +220,12 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
              (query.data == "ножницы" and bot_choice == "бумага") or \
              (query.data == "бумага" and bot_choice == "камень"):
             result = "Ты выиграл! 🎉"
-            user_games[user.id]["wins"] += 1
-            user_points[user.id] += 3
+            user_games[user.id]["wins"] = user_games[user.id].get("wins", 0) + 1
+            user_points[user.id] = user_points.get(user.id, 0) + 3
         else:
             result = "Ты проиграл 😢"
-            user_games[user.id]["losses"] += 1
-            user_points[user.id] += 1
+            user_games[user.id]["losses"] = user_games[user.id].get("losses", 0) + 1
+            user_points[user.id] = user_points.get(user.id, 0) + 1
         await query.edit_message_text(f"Вы выбрали: {query.data.capitalize()}\nБот выбрал: {bot_choice.capitalize()}\n\n{result}")
         await context.bot.send_message(query.message.chat_id, "Хочешь ещё раз?", reply_markup=get_main_keyboard())
 
@@ -245,6 +249,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     text = update.message.text.lower().strip()
+    
     if text.startswith("удалить"):
         try:
             idx = int(text.split()[1]) - 1
@@ -255,6 +260,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("🗑 Задача удалена.")
         except:
             await update.message.reply_text("Используй: удалить N")
+    
     else:
         tasks = user_tasks.get(user.id, [])
         tasks.append(text)
@@ -263,8 +269,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Основной запуск
 async def main():
-    if not DATABASE_URL or not TELEGRAM_TOKEN:
-        raise ValueError("DATABASE_URL или TELEGRAM_TOKEN не заданы")
+    if not DATABASE_URL:
+        raise ValueError("DATABASE_URL не установлен")
     init_db()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     await load_data(app)
